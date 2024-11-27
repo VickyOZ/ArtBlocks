@@ -5,8 +5,8 @@
 
 ;; Storage for tracking artist contributions
 (define-map artist-contributions 
-  {token-id: (buff 32)}
-  {
+  { token-id: (buff 32) }
+  { 
     artists: (list 5 principal),
     royalty-percentages: (list 5 uint),
     contribution-descriptions: (list 5 (string-utf8 100))
@@ -23,10 +23,10 @@
 (define-constant contract-owner tx-sender)
 
 ;; Error constants
-(define-constant err-not-owner (err u100))
-(define-constant err-invalid-royalties (err u101))
-(define-constant err-token-exists (err u102))
-(define-constant err-invalid-contribution (err u103))
+(define-constant ERR-NOT-OWNER (err u100))
+(define-constant ERR-INVALID-ROYALTIES (err u101))
+(define-constant ERR-TOKEN-EXISTS (err u102))
+(define-constant ERR-INVALID-CONTRIBUTION (err u103))
 
 ;; Events
 (define-event create-collaborative-artwork 
@@ -38,6 +38,11 @@
 (define-event royalty-distributed
   (artist principal)
   (amount uint)
+)
+
+;; Utility function to sum a list of uints
+(define-private (sum-list (lst (list 5 uint)))
+  (fold + lst u0)
 )
 
 ;; Create a new collaborative artwork
@@ -53,15 +58,15 @@
         royalty-percentages: royalty-percentages, 
         block-height: block-height
       })))
-      (total-royalty (fold + royalty-percentages u0))
+      (total-royalty (sum-list royalty-percentages))
     )
     ;; Validate total royalty is 100%
-    (asserts! (is-eq total-royalty u100) err-invalid-royalties)
+    (asserts! (is-eq total-royalty u100) ERR-INVALID-ROYALTIES)
     
     ;; Ensure no duplicate token
     (asserts! 
-      (not (is-some (nft-get-owner? art-blocks-collaborative token-id))) 
-      err-token-exists
+      (is-none (nft-get-owner? art-blocks-collaborative token-id)) 
+      ERR-TOKEN-EXISTS
     )
     
     ;; Mint NFT to transaction sender
@@ -69,7 +74,7 @@
     
     ;; Store artist contributions
     (map-set artist-contributions 
-      {token-id: token-id}
+      { token-id: token-id }
       {
         artists: artists,
         royalty-percentages: royalty-percentages,
@@ -95,7 +100,7 @@
       ;; Retrieve artist contributions
       (contributions 
         (unwrap! 
-          (map-get? artist-contributions {token-id: token-id}) 
+          (map-get? artist-contributions { token-id: token-id }) 
           (err u404)
         )
       )
@@ -103,14 +108,15 @@
     ;; Ensure only token owner can distribute royalties
     (asserts! 
       (is-eq tx-sender (unwrap! (nft-get-owner? art-blocks-collaborative token-id) (err u404))) 
-      err-not-owner
+      ERR-NOT-OWNER
     )
     
     ;; Distribute royalties to each artist
     (try! 
-      (fold distribute-artist-royalty 
-        (zip contributions.artists contributions.royalty-percentages)
-        (ok u0)
+      (distribute-royalties-internal 
+        (get artists contributions) 
+        (get royalty-percentages contributions)
+        sale-price
       )
     )
     
@@ -118,9 +124,30 @@
   )
 )
 
-;; Helper function to distribute royalties to individual artists
-(define-private (distribute-artist-royalty 
-  (artist-data {artist: principal, royalty: uint})
+;; Internal function to distribute royalties
+(define-private (distribute-royalties-internal 
+  (artists (list 5 principal))
+  (royalty-percentages (list 5 uint))
+  (sale-price uint)
+)
+  (match (fold distribute-single-artist-royalty 
+          (list 
+            { artist: (element-at artists u0), royalty: (element-at royalty-percentages u0) }
+            { artist: (element-at artists u1), royalty: (element-at royalty-percentages u1) }
+            { artist: (element-at artists u2), royalty: (element-at royalty-percentages u2) }
+            { artist: (element-at artists u3), royalty: (element-at royalty-percentages u3) }
+            { artist: (element-at artists u4), royalty: (element-at royalty-percentages u4) }
+          )
+          (ok u0)
+        )
+    result result
+    error-value (err error-value)
+  )
+)
+
+;; Distribute royalty to a single artist
+(define-private (distribute-single-artist-royalty 
+  (artist-data { artist: principal, royalty: uint })
   (prev-result (response uint uint))
 )
   (match prev-result
@@ -128,22 +155,22 @@
     (let 
       (
         ;; Calculate artist's share
-        (artist-royalty (/ (* sale-price artist-data.royalty) u100))
+        (artist-royalty (/ (* sale-price (get royalty artist-data)) u100))
       )
       ;; Transfer royalty
-      (try! (stx-transfer? artist-royalty tx-sender artist-data.artist))
+      (try! (stx-transfer? artist-royalty tx-sender (get artist artist-data)))
       
       ;; Update artist royalties
       (map-set artist-royalties 
-        artist-data.artist 
+        (get artist artist-data)
         (+ 
-          (default-to u0 (map-get? artist-royalties artist-data.artist)) 
+          (default-to u0 (map-get? artist-royalties (get artist artist-data))) 
           artist-royalty
         )
       )
       
       ;; Emit royalty distribution event
-      (print (royalty-distributed artist-data.artist artist-royalty))
+      (print (royalty-distributed (get artist artist-data) artist-royalty))
       
       (ok (+ prev-value artist-royalty))
     )
@@ -178,7 +205,7 @@
 
 ;; View function to get artist contributions
 (define-read-only (get-artist-contributions (token-id (buff 32)))
-  (map-get? artist-contributions {token-id: token-id})
+  (map-get? artist-contributions { token-id: token-id })
 )
 
 ;; View function to get artist's total royalties
