@@ -1,214 +1,89 @@
-;; ArtBlocks Collaborative NFT Platform
-;; Implement a collaborative NFT platform using Stacks blockchain and Clarity
+;; Define constants
+(define-constant CONTRACT_OWNER tx-sender)
+(define-constant ERR_NOT_AUTHORIZED (err u100))
+(define-constant ERR_ALREADY_VOTED (err u101))
+(define-constant ERR_INVALID_PROPOSAL (err u102))
+(define-constant ERR_VOTING_CLOSED (err u103))
 
-(define-non-fungible-token art-blocks-collaborative (buff 32))
-
-;; Storage for tracking artist contributions
-(define-map artist-contributions 
-  { token-id: (buff 32) }
-  { 
-    artists: (list 5 principal),
-    royalty-percentages: (list 5 uint),
-    contribution-descriptions: (list 5 (string-utf8 100))
-  }
+;; Define data maps
+(define-map proposals
+  { proposal-id: uint }
+  { title: (string-ascii 50), description: (string-ascii 500), vote-count: uint, is-active: bool }
 )
 
-;; Storage for tracking artist royalties
-(define-map artist-royalties 
-  principal 
-  uint
+(define-map votes
+  { voter: principal, proposal-id: uint }
+  { voted: bool }
 )
 
-;; Contract owner
-(define-constant contract-owner tx-sender)
+;; Define data variables
+(define-data-var proposal-count uint u0)
 
-;; Error constants
-(define-constant ERR-NOT-OWNER (err u100))
-(define-constant ERR-INVALID-ROYALTIES (err u101))
-(define-constant ERR-TOKEN-EXISTS (err u102))
-(define-constant ERR-INVALID-CONTRIBUTION (err u103))
+;; Public functions
 
-;; Events
-(define-event create-collaborative-artwork 
-  (token-id (buff 32))
-  (artists (list 5 principal))
-  (royalty-percentages (list 5 uint))
-)
-
-(define-event royalty-distributed
-  (artist principal)
-  (amount uint)
-)
-
-;; Utility function to sum a list of uints
-(define-private (sum-list (lst (list 5 uint)))
-  (fold + lst u0)
-)
-
-;; Create a new collaborative artwork
-(define-public (create-collaborative-artwork 
-  (artists (list 5 principal))
-  (royalty-percentages (list 5 uint))
-  (contribution-descriptions (list 5 (string-utf8 100)))
-)
-  (let 
-    (
-      (token-id (sha256 (to-consensus-buff? {
-        artists: artists, 
-        royalty-percentages: royalty-percentages, 
-        block-height: block-height
-      })))
-      (total-royalty (sum-list royalty-percentages))
+;; Create a new proposal
+(define-public (create-proposal (title (string-ascii 50)) (description (string-ascii 500)))
+  (let ((new-proposal-id (+ (var-get proposal-count) u1)))
+    (if (is-eq tx-sender CONTRACT_OWNER)
+      (begin
+        (map-set proposals
+          { proposal-id: new-proposal-id }
+          { title: title, description: description, vote-count: u0, is-active: true }
+        )
+        (var-set proposal-count new-proposal-id)
+        (ok new-proposal-id)
+      )
+      ERR_NOT_AUTHORIZED
     )
-    ;; Validate total royalty is 100%
-    (asserts! (is-eq total-royalty u100) ERR-INVALID-ROYALTIES)
-    
-    ;; Ensure no duplicate token
-    (asserts! 
-      (is-none (nft-get-owner? art-blocks-collaborative token-id)) 
-      ERR-TOKEN-EXISTS
-    )
-    
-    ;; Mint NFT to transaction sender
-    (try! (nft-mint? art-blocks-collaborative token-id tx-sender))
-    
-    ;; Store artist contributions
-    (map-set artist-contributions 
-      { token-id: token-id }
-      {
-        artists: artists,
-        royalty-percentages: royalty-percentages,
-        contribution-descriptions: contribution-descriptions
-      }
-    )
-    
-    ;; Emit event
-    (print (create-collaborative-artwork token-id artists royalty-percentages))
-    
-    ;; Return token ID
-    (ok token-id)
   )
 )
 
-;; Distribute royalties for a sold artwork
-(define-public (distribute-royalties 
-  (token-id (buff 32))
-  (sale-price uint)
-)
-  (let 
-    (
-      ;; Retrieve artist contributions
-      (contributions 
-        (unwrap! 
-          (map-get? artist-contributions { token-id: token-id }) 
-          (err u404)
-        )
-      )
+;; Vote on a proposal
+(define-public (vote (proposal-id uint))
+  (let (
+    (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) ERR_INVALID_PROPOSAL))
+    (has-voted (default-to false (get voted (map-get? votes { voter: tx-sender, proposal-id: proposal-id }))))
+  )
+    (asserts! (get is-active proposal) ERR_VOTING_CLOSED)
+    (asserts! (not has-voted) ERR_ALREADY_VOTED)
+    (map-set votes { voter: tx-sender, proposal-id: proposal-id } { voted: true })
+    (map-set proposals
+      { proposal-id: proposal-id }
+      (merge proposal { vote-count: (+ (get vote-count proposal) u1) })
     )
-    ;; Ensure only token owner can distribute royalties
-    (asserts! 
-      (is-eq tx-sender (unwrap! (nft-get-owner? art-blocks-collaborative token-id) (err u404))) 
-      ERR-NOT-OWNER
-    )
-    
-    ;; Distribute royalties to each artist
-    (try! 
-      (distribute-royalties-internal 
-        (get artists contributions) 
-        (get royalty-percentages contributions)
-        sale-price
-      )
-    )
-    
     (ok true)
   )
 )
 
-;; Internal function to distribute royalties
-(define-private (distribute-royalties-internal 
-  (artists (list 5 principal))
-  (royalty-percentages (list 5 uint))
-  (sale-price uint)
-)
-  (match (fold distribute-single-artist-royalty 
-          (list 
-            { artist: (element-at artists u0), royalty: (element-at royalty-percentages u0) }
-            { artist: (element-at artists u1), royalty: (element-at royalty-percentages u1) }
-            { artist: (element-at artists u2), royalty: (element-at royalty-percentages u2) }
-            { artist: (element-at artists u3), royalty: (element-at royalty-percentages u3) }
-            { artist: (element-at artists u4), royalty: (element-at royalty-percentages u4) }
-          )
-          (ok u0)
+;; Close a proposal
+(define-public (close-proposal (proposal-id uint))
+  (let ((proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) ERR_INVALID_PROPOSAL)))
+    (if (is-eq tx-sender CONTRACT_OWNER)
+      (begin
+        (map-set proposals
+          { proposal-id: proposal-id }
+          (merge proposal { is-active: false })
         )
-    result result
-    error-value (err error-value)
-  )
-)
-
-;; Distribute royalty to a single artist
-(define-private (distribute-single-artist-royalty 
-  (artist-data { artist: principal, royalty: uint })
-  (prev-result (response uint uint))
-)
-  (match prev-result
-    prev-value
-    (let 
-      (
-        ;; Calculate artist's share
-        (artist-royalty (/ (* sale-price (get royalty artist-data)) u100))
+        (ok true)
       )
-      ;; Transfer royalty
-      (try! (stx-transfer? artist-royalty tx-sender (get artist artist-data)))
-      
-      ;; Update artist royalties
-      (map-set artist-royalties 
-        (get artist artist-data)
-        (+ 
-          (default-to u0 (map-get? artist-royalties (get artist artist-data))) 
-          artist-royalty
-        )
-      )
-      
-      ;; Emit royalty distribution event
-      (print (royalty-distributed (get artist artist-data) artist-royalty))
-      
-      (ok (+ prev-value artist-royalty))
+      ERR_NOT_AUTHORIZED
     )
-    error-value 
-    (err error-value)
   )
 )
 
-;; Allow artists to withdraw accumulated royalties
-(define-public (withdraw-royalties)
-  (let 
-    (
-      (royalty-amount 
-        (unwrap! 
-          (map-get? artist-royalties tx-sender) 
-          (err u404)
-        )
-      )
-    )
-    ;; Ensure royalties exist
-    (asserts! (> royalty-amount u0) (err u404))
-    
-    ;; Reset royalties before transfer
-    (map-set artist-royalties tx-sender u0)
-    
-    ;; Transfer royalties
-    (try! (stx-transfer? royalty-amount tx-sender tx-sender))
-    
-    (ok royalty-amount)
-  )
+;; Read-only functions
+
+;; Get proposal details
+(define-read-only (get-proposal (proposal-id uint))
+  (map-get? proposals { proposal-id: proposal-id })
 )
 
-;; View function to get artist contributions
-(define-read-only (get-artist-contributions (token-id (buff 32)))
-  (map-get? artist-contributions { token-id: token-id })
+;; Get the total number of proposals
+(define-read-only (get-proposal-count)
+  (var-get proposal-count)
 )
 
-;; View function to get artist's total royalties
-(define-read-only (get-artist-royalties (artist principal))
-  (map-get? artist-royalties artist)
+;; Check if a user has voted on a specific proposal
+(define-read-only (has-voted (voter principal) (proposal-id uint))
+  (default-to false (get voted (map-get? votes { voter: voter, proposal-id: proposal-id })))
 )
