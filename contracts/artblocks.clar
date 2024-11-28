@@ -1,4 +1,4 @@
-;; Enhanced Voting Contract with Additional Robustness Features
+;; Enhanced Voting Contract with Additional Robustness Features and Input Validation
 
 ;; Define constants
 (define-constant CONTRACT_OWNER tx-sender)
@@ -9,6 +9,8 @@
 (define-constant ERR_INVALID_INPUT (err u104))
 (define-constant ERR_PROPOSAL_NOT_FOUND (err u105))
 (define-constant ERR_VOTING_PERIOD_EXCEEDED (err u106))
+(define-constant MAX_VOTING_DURATION u2592000) ;; 30 days in seconds
+(define-constant MIN_VOTING_DURATION u86400) ;; 1 day in seconds
 
 ;; Define data maps
 (define-map proposals
@@ -47,6 +49,14 @@
   )
 )
 
+;; Validate proposal ID
+(define-private (validate-proposal-id (proposal-id uint))
+  (and 
+    (> proposal-id u0)
+    (<= proposal-id (var-get proposal-count))
+  )
+)
+
 ;; Check if a proposal exists and is still active
 (define-private (is-proposal-active (proposal-id uint))
   (match (map-get? proposals { proposal-id: proposal-id })
@@ -57,6 +67,11 @@
       )
     false
   )
+)
+
+;; Validate voting duration
+(define-private (validate-voting-duration (duration uint))
+  (and (>= duration MIN_VOTING_DURATION) (<= duration MAX_VOTING_DURATION))
 )
 
 ;; Public functions
@@ -75,6 +90,9 @@
     
     ;; Validate proposal input
     (asserts! (validate-proposal-input title description) ERR_INVALID_INPUT)
+    
+    ;; Validate voting duration
+    (asserts! (validate-voting-duration voting-duration) ERR_INVALID_INPUT)
     
     ;; Create proposal with extended metadata
     (map-set proposals
@@ -103,6 +121,9 @@
     (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) ERR_INVALID_PROPOSAL))
     (has-voted (default-to false (get voted (map-get? votes { voter: tx-sender, proposal-id: proposal-id }))))
   )
+    ;; Validate proposal ID
+    (asserts! (validate-proposal-id proposal-id) ERR_INVALID_PROPOSAL)
+    
     ;; Validate proposal is active and within voting period
     (asserts! (is-proposal-active proposal-id) ERR_VOTING_CLOSED)
     
@@ -130,20 +151,20 @@
 
 ;; Close a proposal manually (can only be done by contract owner)
 (define-public (close-proposal (proposal-id uint))
-  (let ((proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) ERR_INVALID_PROPOSAL)))
+  (let (
+    (proposal (unwrap! (map-get? proposals { proposal-id: proposal-id }) ERR_PROPOSAL_NOT_FOUND))
+  )
+    ;; Validate proposal ID
+    (asserts! (validate-proposal-id proposal-id) ERR_INVALID_PROPOSAL)
+    
     ;; Validate sender is contract owner
     (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_NOT_AUTHORIZED)
     
-    ;; Validate proposal exists
-    (asserts! (is-some (map-get? proposals { proposal-id: proposal-id })) ERR_PROPOSAL_NOT_FOUND)
-    
     ;; Close the proposal
-    (map-set proposals
+    (ok (map-set proposals
       { proposal-id: proposal-id }
       (merge proposal { is-active: false })
-    )
-    
-    (ok true)
+    ))
   )
 )
 
@@ -153,8 +174,8 @@
     ;; Validate sender is contract owner
     (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_NOT_AUTHORIZED)
     
-    ;; Validate duration is reasonable (e.g., between 1 day and 30 days)
-    (asserts! (and (>= duration u86400) (<= duration u2592000)) ERR_INVALID_INPUT)
+    ;; Validate duration is reasonable (between MIN_VOTING_DURATION and MAX_VOTING_DURATION)
+    (asserts! (validate-voting-duration duration) ERR_INVALID_INPUT)
     
     ;; Set new default duration
     (var-set default-voting-duration duration)
@@ -166,14 +187,18 @@
 ;; Get proposal details with additional context
 (define-read-only (get-proposal-details (proposal-id uint))
   (let ((proposal (map-get? proposals { proposal-id: proposal-id })))
-    (if (is-some proposal)
-        (some {
-          proposal: proposal,
-          is-active: (is-proposal-active proposal-id),
-          remaining-blocks: (match proposal
-            p (- (+ (get created-at p) (get voting-duration p)) block-height)
-            u0)
-        })
+    ;; Validate proposal ID before processing
+    (if (validate-proposal-id proposal-id)
+        (if (is-some proposal)
+            (some {
+              proposal: proposal,
+              is-active: (is-proposal-active proposal-id),
+              remaining-blocks: (match proposal
+                p (- (+ (get created-at p) (get voting-duration p)) block-height)
+                u0)
+            })
+            none
+        )
         none
     )
   )
@@ -186,5 +211,9 @@
 
 ;; Check if a user has voted on a specific proposal
 (define-read-only (has-voted (voter principal) (proposal-id uint))
-  (default-to false (get voted (map-get? votes { voter: voter, proposal-id: proposal-id })))
+  ;; Validate proposal ID before checking votes
+  (if (validate-proposal-id proposal-id)
+      (default-to false (get voted (map-get? votes { voter: voter, proposal-id: proposal-id })))
+      false
+  )
 )

@@ -1,80 +1,89 @@
-# ArtBlocks: Collaborative NFT Platform on Stacks Blockchain
+# Stacks Voting Contract
 
 ## Overview
 
-ArtBlocks is a Clarity smart contract that enables collaborative NFT creation on the Stacks blockchain. The platform allows multiple artists to contribute to a single digital artwork with transparent royalty management.
+This is a robust voting contract implemented in Clarity for the Stacks blockchain. The contract provides a flexible and secure mechanism for creating, managing, and participating in proposals with built-in governance features.
 
-## Key Features
+## Features
 
-- **Collaborative Artwork Creation**
-  - Support for up to 5 artists per NFT
-  - Precise contribution tracking
-  - Flexible royalty percentage allocation
-
-- **Secure Royalty Distribution**
-  - On-chain royalty tracking
-  - Automatic percentage-based splits
-  - Individual artist royalty withdrawal
+- **Proposal Creation**: Only contract owner can create proposals
+- **Flexible Voting Duration**: Customizable voting periods
+- **Vote Tracking**: Prevents multiple votes per user
+- **Automatic Proposal Closure**: Proposals automatically close after specified duration
+- **Detailed Proposal Metadata**: Tracks proposal creator, timestamp, and voting details
 
 ## Contract Functions
 
-### Create Collaborative Artwork
-```clarity
-(create-collaborative-artwork 
-  (artists (list 5 principal))
-  (royalty-percentages (list 5 uint))
-  (contribution-descriptions (list 5 (string-utf8 100)))
-)
-```
-- Creates a unique NFT
-- Validates total royalty percentage
-- Stores artist contributions
+### Proposal Management
 
-### Distribute Royalties
-```clarity
-(distribute-royalties 
-  (token-id (buff 32))
-  (sale-price uint)
-)
-```
-- Calculates and distributes royalties
-- Transfers STX to contributing artists
+- `create-proposal`: Create a new proposal
+  - Parameters: 
+    - `title`: Proposal title (max 50 characters)
+    - `description`: Proposal description (max 500 characters)
+    - `custom-duration`: Optional custom voting duration
 
-### Withdraw Royalties
-```clarity
-(withdraw-royalties)
-```
-- Allows artists to claim accumulated royalties
+- `close-proposal`: Manually close a proposal (owner-only)
+- `set-default-voting-duration`: Update default voting period (owner-only)
+
+### Voting
+
+- `vote`: Cast a vote on an active proposal
+  - Prevents multiple votes
+  - Tracks vote timestamp
+  - Updates proposal vote count
+
+### Read-Only Functions
+
+- `get-proposal-details`: Retrieve comprehensive proposal information
+- `get-proposal-count`: Get total number of proposals
+- `has-voted`: Check if a user has voted on a specific proposal
 
 ## Error Handling
 
-- `err-not-owner`: Unauthorized royalty distribution
-- `err-invalid-royalties`: Incorrect royalty percentage
-- `err-token-exists`: Preventing duplicate tokens
+The contract includes several error constants for different scenarios:
+- `ERR_NOT_AUTHORIZED`: Unauthorized access attempt
+- `ERR_ALREADY_VOTED`: Attempt to vote multiple times
+- `ERR_INVALID_PROPOSAL`: Invalid proposal ID
+- `ERR_VOTING_CLOSED`: Voting period has ended
+- `ERR_INVALID_INPUT`: Invalid input parameters
+
+## Default Parameters
+
+- Default Voting Duration: 7 days (604,800 seconds)
+- Maximum Proposal Title Length: 50 characters
+- Maximum Proposal Description Length: 500 characters
+
+## Usage Example
+
+```clarity
+;; Create a proposal
+(create-proposal 
+  "Community Funding" 
+  "Proposal to allocate funds for community projects"
+  (some u604800) ;; Optional custom duration
+)
+
+;; Vote on a proposal
+(vote u1) ;; Vote on proposal with ID 1
+
+;; Get proposal details
+(get-proposal-details u1)
+```
 
 ## Security Considerations
 
-- Input validation for artist contributions
-- Percentage-based royalty calculation
-- Secure STX transfers
-- Prevention of duplicate token minting
+- Only the contract owner can create proposals
+- Prevents multiple votes from the same user
+- Automatic proposal closure after voting period
+- Input validation for proposal creation
 
-## Requirements
+## Installation
 
-- Stacks Blockchain
-- Hiro Wallet or Compatible Stacks Wallet
-- Clarity Smart Contract Support
+1. Ensure you have a Stacks-compatible wallet
+2. Deploy the contract to the Stacks blockchain
+3. Interact with the contract using a Stacks-compatible interface
 
-## Deployment
+## Contributing
 
-1. Compile the Clarity contract
-2. Deploy using Stacks Web Wallet or CLI
-3. Interact via Stacks-compatible interfaces
-
-## Future Roadmap
-
-- Enhanced metadata storage
-- Cross-platform NFT integration
-- Gas optimization
-- Advanced collaboration tools
+Contributions are welcome! Please submit pull requests or open issues on the project repository.
 
